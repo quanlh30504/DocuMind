@@ -29,20 +29,32 @@ fn ocr_runtime_status() -> String {
     }
 }
 
+/// Language codes with tessdata actually installed (spec §30's "Models"
+/// settings list), so the UI only offers languages that will really work.
+#[tauri::command]
+fn ocr_languages() -> Vec<String> {
+    TesseractOcrProvider::installed_langs()
+}
+
 /// Runs one document through the pipeline (ARCHITECTURE.md §3) and writes
 /// `output_dir/{raw,metadata.json,full_document.md}` (spec §24). Emits
 /// `job://progress` events as pages complete so the UI can show a progress
 /// bar; a single page failing does not fail the whole call (spec §45) — it's
 /// recorded in the returned `JobState` instead.
+///
+/// `lang` is `None`/`"auto"` (load every installed language together) or an
+/// explicit code (`"eng"`, `"vie"`, ...) from `ocr_languages`.
 #[tauri::command]
 async fn process_document(
     app: AppHandle,
     source: DocumentSource,
     output_dir: String,
+    lang: Option<String>,
 ) -> Result<JobState, String> {
     let output_dir = std::path::PathBuf::from(output_dir);
     tauri::async_runtime::spawn_blocking(move || {
-        let ocr = TesseractOcrProvider::default();
+        let resolved_lang = TesseractOcrProvider::resolve_lang(lang.as_deref());
+        let ocr = TesseractOcrProvider::new(resolved_lang);
         job::run_document(&source, &output_dir, &ocr, |event: JobEvent| {
             let _ = app.emit("job://progress", &event);
         })
@@ -61,6 +73,7 @@ pub fn run() {
             get_hardware_profile,
             discover_documents,
             ocr_runtime_status,
+            ocr_languages,
             process_document
         ])
         .run(tauri::generate_context!())

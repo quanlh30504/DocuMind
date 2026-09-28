@@ -108,6 +108,72 @@ button:active {
   color: #c0392b;
 }
 
+.lang-row {
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.lang-row select {
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  padding: 0.45em 0.7em;
+  font-size: 0.95em;
+  font-family: inherit;
+  background: #fff;
+}
+
+.processing-panel h2 {
+  text-align: left;
+  font-size: 1.05em;
+}
+
+.progress-bar-track {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: #e0e0e0;
+  overflow: hidden;
+  margin: 0.5rem 0;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: #396cd8;
+  transition: width 0.25s ease;
+}
+
+.progress-label {
+  text-align: left;
+  font-size: 0.85em;
+  color: #555;
+  margin: 0 0 0.5rem;
+}
+
+.page-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+  font-size: 0.85em;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.page-log li {
+  padding: 0.15rem 0;
+}
+
+.page-log-completed {
+  color: #2e7d32;
+}
+
+.page-log-failed {
+  color: #c0392b;
+}
+
+.page-log-running {
+  color: #396cd8;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f6f6f6;
@@ -133,5 +199,19 @@ button:active {
 
   .source-list li {
     border-bottom-color: #ffffff22;
+  }
+
+  .lang-row select {
+    background: #0f0f0f98;
+    color: #fff;
+    border-color: #444;
+  }
+
+  .progress-bar-track {
+    background: #444;
+  }
+
+  .progress-label {
+    color: #bbb;
   }
 }

@@ -31,6 +31,43 @@ impl TesseractOcrProvider {
             .output()
             .is_ok_and(|o| o.status.success())
     }
+
+    /// Language codes with tessdata actually installed on this machine
+    /// (`osd`, the orientation/script-only data, is not a usable OCR
+    /// language and is filtered out). Backs the language picker in the UI
+    /// and the "auto" mode's language string below.
+    pub fn installed_langs() -> Vec<String> {
+        let Ok(output) = Command::new("tesseract").arg("--list-langs").output() else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .skip(1) // "List of available languages in ...:"
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && *l != "osd")
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Resolves a user-facing language selection to a Tesseract `-l` value.
+    /// `None`/`"auto"` loads every installed language together (Tesseract's
+    /// LSTM engine picks the best-fitting characters per word across the
+    /// loaded models), which is more robust than a separate pre-classifying
+    /// "detect the language" pass would be on a single page of mixed or
+    /// short text, and needs no extra dependency.
+    pub fn resolve_lang(selection: Option<&str>) -> String {
+        match selection {
+            Some(lang) if !lang.is_empty() && lang != "auto" => lang.to_string(),
+            _ => {
+                let installed = Self::installed_langs();
+                if installed.is_empty() {
+                    "eng".to_string()
+                } else {
+                    installed.join("+")
+                }
+            }
+        }
+    }
 }
 
 impl Default for TesseractOcrProvider {
@@ -142,6 +179,12 @@ impl OCRProvider for TesseractOcrProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_lang_passes_through_explicit_selection() {
+        assert_eq!(TesseractOcrProvider::resolve_lang(Some("vie")), "vie");
+        assert_eq!(TesseractOcrProvider::resolve_lang(Some("eng")), "eng");
+    }
 
     #[test]
     fn reconstruct_joins_words_on_same_line_and_averages_confidence() {
