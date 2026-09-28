@@ -30,7 +30,7 @@ CI produces one artifact set per `(os, arch)` row of the build matrix; `platform
 
 ```
 push (tag) 
-  → matrix: [windows-latest, macos-latest (arm64), macos-13 (x64), ubuntu-latest]
+  → matrix: [windows-latest, macos-latest (arm64), macos-15-intel (x64), ubuntu-latest]
       → checkout
       → setup Rust toolchain (target-specific)
       → fetch/verify pinned native dep binaries (ONNX Runtime, llama.cpp) for this target

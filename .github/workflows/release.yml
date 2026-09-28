@@ -26,7 +26,7 @@ jobs:
         include:
           - platform: macos-latest # Apple Silicon
             target: aarch64-apple-darwin
-          - platform: macos-13 # Intel
+          - platform: macos-15-intel # Intel — macos-13 was retired by GitHub on 2025-12-08
             target: x86_64-apple-darwin
           - platform: ubuntu-22.04
             target: ""
