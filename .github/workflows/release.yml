@@ -12,6 +12,11 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to release (e.g. v0.1.0) — required so a manual run doesn't tag the branch name itself"
+        required: true
+        type: string
 
 jobs:
   release:
@@ -66,8 +71,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "DocuMind ${{ github.ref_name }}"
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          releaseName: "DocuMind ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           releaseBody: |
             Unsigned build (no code-signing certificates yet — see PACKAGING.md §5), so your OS will warn on first launch. That's expected; instructions below.
 
