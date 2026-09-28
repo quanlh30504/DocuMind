@@ -33,16 +33,35 @@ pub enum InstallState {
 pub enum CoreError {
     #[error("not yet implemented: {0}")]
     NotImplemented(&'static str),
+    #[error("required external tool not found: {0}")]
+    ToolMissing(&'static str),
+    #[error("{0}")]
+    Engine(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 
 pub type CoreResult<T> = Result<T, CoreError>;
 
-/// OCR engine boundary (spec §12, TECH_DECISION.md §2). Phase 2 implements this
-/// against RapidOCR's ONNX models via the `ort` crate.
+/// Result of running OCR over a single page image (spec §21: every page needs
+/// confidence + status + warnings).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OCRPageResult {
+    pub text: String,
+    /// 0.0-1.0, averaged from engine-reported per-word/line confidence.
+    pub confidence: f32,
+    pub warnings: Vec<String>,
+}
+
+/// OCR engine boundary (spec §12, TECH_DECISION.md §2). The Phase 2 MVP
+/// implements this against the system Tesseract binary (TECH_DECISION.md §2's
+/// documented fallback engine) via CLI shell-out, since it needs no bundled
+/// ONNX runtime/model download to get a real, working pipeline end-to-end.
+/// The RapidOCR-ONNX provider (the documented default) is a separate
+/// implementation of this same trait — swapping it in later does not touch
+/// any pipeline code, which is the point of this boundary existing.
 pub trait OCRProvider {
-    fn recognize(&self, image_path: &Path) -> CoreResult<String>;
+    fn recognize(&self, image_path: &Path) -> CoreResult<OCRPageResult>;
     fn engine_info(&self) -> &'static str;
 }
 

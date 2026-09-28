@@ -15,14 +15,15 @@ Concretizes the spec's §47 phase list against the decisions in `TECH_DECISION.m
 
 ## Phase 2 — OCR MVP
 
-- `OCRService` wired to RapidOCR-ONNX via `ort`; image preprocessing (deskew, binarization, denoise) as a discrete pipeline stage.
-- PDF native-text extraction + per-page native-vs-OCR decision (§17).
-- Full pipeline stub through to Markdown export (flat, no chapter detection yet — one `full_document.md` + `raw/page-NNN.txt`).
-- Progress UI, per-page error handling and isolation (§45) — a bad page doesn't kill the job.
-- **Benchmark gate** (per `MODEL_STRATEGY.md` §1): run the §43 fixture set through RapidOCR-ONNX and Tesseract, publish `docs/benchmarks/ocr-engine-comparison.md`, confirm or revise the default engine choice before Phase 3 builds structure detection on top of it.
-- Download manager (§27) built out fully here (resumable, checksummed, disk-space-checked), since it's needed for any OCR language pack beyond the bundled English set.
+- `OCRService` wired to a real, working `OCRProvider` end-to-end; image preprocessing (adaptive binarization landed — Sauvola local threshold; deskew/denoise remain accuracy-tuning follow-ups, see note below) as a discrete pipeline stage.
+- PDF native-text extraction + per-page native-vs-OCR decision (§17) — implemented via `poppler-utils` (`pdfinfo`/`pdftotext`/`pdftoppm`).
+- Full pipeline stub through to Markdown export (flat, no chapter detection yet — one `full_document.md` + `raw/page-NNN.txt`), with per-page confidence/status/warnings in `metadata.json` (§21).
+- Progress events + per-page error handling and isolation (§45) — a bad page doesn't kill the job; implemented and unit-tested (`core/job.rs`).
+- **Engine sequencing note (deviation from the original plan, recorded here for transparency):** the concrete `OCRProvider` implemented first is **Tesseract** (`core/ocr/tesseract.rs`, CLI shell-out), not RapidOCR-ONNX. Reason: Tesseract is TECH_DECISION.md §2's documented fallback engine and needs no bundled ONNX runtime or downloaded model set, so it gets a real, verifiable, end-to-end pipeline working immediately. RapidOCR-ONNX is a second implementation of the same `OCRProvider` trait — a drop-in, not a pipeline rewrite — and is the remaining Phase 2 work, gated behind the download-manager/`ort`-integration work below.
+- **Benchmark gate** (per `MODEL_STRATEGY.md` §1): run the §43 fixture set through RapidOCR-ONNX and Tesseract, publish `docs/benchmarks/ocr-engine-comparison.md`, confirm or revise the default engine choice before Phase 3 builds structure detection on top of it. **Status: not yet run** — blocked on both a real fixture corpus (§43) and the RapidOCR-ONNX provider existing to benchmark against; the placeholder doc records the methodology so this isn't silently dropped.
+- Download manager (§27): **not yet built** — deferred until it's needed to fetch the first real downloadable artifact (an OCR language pack or the RapidOCR-ONNX model set), rather than built speculatively against nothing.
 
-**Exit criterion:** drop a real scanned book (English, 50–100 pages) → get a readable `full_document.md` with per-page confidence in `metadata.json`, entirely offline after the initial (bundled) OCR is ready.
+**Exit criterion:** drop a real scanned book (English, 50–100 pages) → get a readable `full_document.md` with per-page confidence in `metadata.json`, entirely offline after the initial (bundled) OCR is ready. **Verified so far:** PDF page count/native-text-extraction/rendering and the preprocessing stage confirmed against real fixtures (`examples/pdf_smoke.rs`); the OCR step itself and a full real-book run are pending Tesseract being installed on the dev machine.
 
 ## Phase 3 — Document Intelligence
 
