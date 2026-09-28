@@ -4,6 +4,7 @@ use crate::core::document::{self, DocumentSource};
 use crate::core::hardware::{HardwareManager, HardwareProfile};
 use crate::core::job::{self, JobEvent, JobState};
 use crate::core::ocr::TesseractOcrProvider;
+use crate::core::spellcheck::SpellChecker;
 use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
@@ -54,10 +55,17 @@ async fn process_document(
     let output_dir = std::path::PathBuf::from(output_dir);
     tauri::async_runtime::spawn_blocking(move || {
         let resolved_lang = TesseractOcrProvider::resolve_lang(lang.as_deref());
-        let ocr = TesseractOcrProvider::new(resolved_lang);
-        job::run_document(&source, &output_dir, &ocr, |event: JobEvent| {
-            let _ = app.emit("job://progress", &event);
-        })
+        let ocr = TesseractOcrProvider::new(resolved_lang.clone());
+        let spell_checker = SpellChecker::load(&resolved_lang);
+        job::run_document(
+            &source,
+            &output_dir,
+            &ocr,
+            Some(&spell_checker),
+            |event: JobEvent| {
+                let _ = app.emit("job://progress", &event);
+            },
+        )
         .map_err(|e| e.to_string())
     })
     .await

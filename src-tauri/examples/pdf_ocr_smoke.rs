@@ -18,7 +18,7 @@ fn main() {
         kind: DocumentKind::Pdf,
     };
 
-    let state = job::run_document(&source, &output_dir, &ocr, |event| {
+    let state = job::run_document(&source, &output_dir, &ocr, None, |event| {
         println!("event: {event:?}");
     })
     .expect("run_document failed");

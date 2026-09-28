@@ -28,6 +28,7 @@ sysinfo = "0.33"
 uuid = { version = "1", features = ["v4", "serde"] }
 dirs = "5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+zspell = "0.5"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

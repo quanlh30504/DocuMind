@@ -44,6 +44,8 @@ Concretizes the spec's §47 phase list against the decisions in `TECH_DECISION.m
 
 **Exit criterion:** same fixture book processed with AI enabled shows measurably better chapter/heading recall on the ambiguous-case fixtures than the Phase 3 rule-only baseline, with zero body-text drift.
 
+**Delivered ahead of schedule, non-AI half only:** OCR output on real documents (see below) surfaced genuine recognition errors beyond what a wrong language model explains — dictionary-based *flagging* (`core/spellcheck.rs`, via the pure-Rust `zspell` crate against Hunspell word lists) was added so users can see which words are probably wrong today, before real AI correction exists. This is explicitly the non-AI half of spec §2's "OCR error correction suggestions": it can tell you a word is *probably* wrong (not in any loaded dictionary), it cannot tell you what it should have been — that needs the real `LocalAIProvider::suggest_correction` this phase still owes, gated on the same llama.cpp/model-download work as `classify_structure`. The UI states this boundary explicitly ("flagged, not fixed") rather than implying more than the dictionary check can deliver. Both directions were offered to the user (full LLM now vs. dictionary flagging first); dictionary flagging first was chosen given this dev machine's history of slow/flaky large downloads.
+
 ## Phase 5 — Reliability
 
 - Full resume/retry per §22–23: kill the process mid-job in a test harness, relaunch, verify exact resume point and that completed pages aren't reprocessed.

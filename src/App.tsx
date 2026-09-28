@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { openPath } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 interface HardwareProfile {
@@ -23,6 +24,7 @@ interface PageRecord {
   confidence: number;
   status: "completed" | "failed";
   warnings: string[];
+  flagged_words: string[];
 }
 
 interface JobState {
@@ -66,7 +68,7 @@ function App() {
   const [currentDoc, setCurrentDoc] = useState<{ index: number; total: number; path: string } | null>(null);
   const [pageTotal, setPageTotal] = useState(0);
   const [pageLog, setPageLog] = useState<PageLogEntry[]>([]);
-  const [results, setResults] = useState<JobState[]>([]);
+  const [results, setResults] = useState<{ state: JobState; outputDir: string }[]>([]);
 
   useEffect(() => {
     invoke<HardwareProfile>("get_hardware_profile").then(setHardware);
@@ -117,7 +119,7 @@ function App() {
     setProcessing(true);
     setResults([]);
     try {
-      const jobResults: JobState[] = [];
+      const jobResults: { state: JobState; outputDir: string }[] = [];
       for (let i = 0; i < sources.length; i++) {
         const source = sources[i];
         setCurrentDoc({ index: i + 1, total: sources.length, path: source.path });
@@ -131,7 +133,7 @@ function App() {
           outputDir,
           lang: selectedLang,
         });
-        jobResults.push(state);
+        jobResults.push({ state, outputDir });
       }
       setResults(jobResults);
     } catch (e) {
@@ -233,20 +235,48 @@ function App() {
       {results.length > 0 && (
         <section className="status-panel">
           <h2>Results</h2>
-          {results.map((r) => (
-            <div key={r.document_id} style={{ marginBottom: "0.75rem" }}>
-              <p>
-                <strong>{basename(r.document_path)}</strong> —{" "}
-                {r.status === "COMPLETED" && "✓ Completed"}
-                {r.status === "COMPLETED_WITH_WARNINGS" && "⚠ Completed with warnings"}
-                {r.status === "INTERRUPTED" && "✗ Interrupted"}
-              </p>
-              <p>
-                {r.completed_pages}/{r.total_pages} pages completed
-                {r.failed_pages.length > 0 && `, ${r.failed_pages.length} failed (${r.failed_pages.join(", ")})`}
-              </p>
-            </div>
-          ))}
+          {results.map(({ state: r, outputDir }) => {
+            const flaggedWords = Array.from(new Set(r.pages.flatMap((p) => p.flagged_words)));
+            const spellcheckUnavailable = Array.from(
+              new Set(
+                r.pages
+                  .flatMap((p) => p.warnings)
+                  .filter((w) => w.startsWith("spellcheck_unavailable:"))
+                  .map((w) => w.split(":")[1])
+              )
+            );
+            return (
+              <div key={r.document_id} style={{ marginBottom: "0.75rem" }}>
+                <p>
+                  <strong>{basename(r.document_path)}</strong> —{" "}
+                  {r.status === "COMPLETED" && "✓ Completed"}
+                  {r.status === "COMPLETED_WITH_WARNINGS" && "⚠ Completed with warnings"}
+                  {r.status === "INTERRUPTED" && "✗ Interrupted"}
+                </p>
+                <p>
+                  {r.completed_pages}/{r.total_pages} pages completed
+                  {r.failed_pages.length > 0 && `, ${r.failed_pages.length} failed (${r.failed_pages.join(", ")})`}
+                </p>
+                {spellcheckUnavailable.length > 0 && (
+                  <p className="warning-note">
+                    ⚠ No dictionary installed for: {spellcheckUnavailable.join(", ")} — spelling flags skipped for those pages.
+                  </p>
+                )}
+                {flaggedWords.length > 0 && (
+                  <details className="flagged-words">
+                    <summary>{flaggedWords.length} word(s) flagged as possibly misspelled/wrong</summary>
+                    <p className="flagged-word-list">{flaggedWords.join(", ")}</p>
+                  </details>
+                )}
+                <button onClick={() => openPath(outputDir)}>Open Output Folder</button>
+              </div>
+            );
+          })}
+          <p className="ai-note">
+            Note: flagging above is dictionary-based only (no AI model installed) — it can <em>detect</em>{" "}
+            likely misspellings or garbled OCR/font errors, but cannot automatically fix them. A local AI
+            model (planned) would be needed to suggest actual corrections.
+          </p>
         </section>
       )}
 

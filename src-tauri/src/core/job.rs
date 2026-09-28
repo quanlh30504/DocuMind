@@ -10,6 +10,7 @@
 
 use crate::core::document::{DocumentKind, DocumentSource};
 use crate::core::preprocess;
+use crate::core::spellcheck::SpellChecker;
 use crate::core::traits::{CoreResult, OCRProvider};
 use crate::core::{pdf, traits::JobId};
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,13 @@ pub struct PageRecord {
     pub confidence: f32,
     pub status: PageStatus,
     pub warnings: Vec<String>,
+    /// Dictionary-flagged words (core/spellcheck.rs): *possibly* wrong, never
+    /// auto-corrected — see that module's doc comment for why. Empty when no
+    /// spell checker was available for the selected language(s), which is
+    /// distinguishable from "checked and found nothing" via `warnings`
+    /// carrying a `spellcheck_unavailable:<lang>` entry in that case.
+    #[serde(default)]
+    pub flagged_words: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,6 +74,26 @@ pub enum JobEvent {
 }
 
 const RENDER_DPI: u32 = 200;
+/// Cap on flagged words recorded per page (core/spellcheck.rs) so a
+/// low-quality page's noise can't blow up metadata.json.
+const MAX_FLAGGED_WORDS_PER_PAGE: usize = 50;
+
+fn flag_and_warn(text: &str, spell_checker: Option<&SpellChecker>, warnings: &mut Vec<String>) -> Vec<String> {
+    let Some(checker) = spell_checker else {
+        return Vec::new();
+    };
+    if !checker.is_ready() {
+        for lang in &checker.unavailable_langs {
+            warnings.push(format!("spellcheck_unavailable:{lang}"));
+        }
+        return Vec::new();
+    }
+    let flagged = checker.flag_words(text, MAX_FLAGGED_WORDS_PER_PAGE);
+    if !flagged.is_empty() {
+        warnings.push(format!("possible_spelling_errors:{}", flagged.len()));
+    }
+    flagged
+}
 
 fn process_page(
     source: &DocumentSource,
@@ -73,18 +101,22 @@ fn process_page(
     tmp_dir: &Path,
     raw_dir: &Path,
     ocr: &dyn OCRProvider,
+    spell_checker: Option<&SpellChecker>,
 ) -> CoreResult<PageRecord> {
     let raw_path = raw_dir.join(format!("page-{page:03}.txt"));
 
     if source.kind == DocumentKind::Pdf {
         if let Some(native) = pdf::extract_native_text(&source.path, page)? {
             std::fs::write(&raw_path, &native)?;
+            let mut warnings = Vec::new();
+            let flagged_words = flag_and_warn(&native, spell_checker, &mut warnings);
             return Ok(PageRecord {
                 page,
                 source: PageSource::Native,
                 confidence: 1.0,
                 status: PageStatus::Completed,
-                warnings: vec![],
+                warnings,
+                flagged_words,
             });
         }
     }
@@ -102,12 +134,16 @@ fn process_page(
     let result = ocr.recognize(&preprocessed)?;
     std::fs::write(&raw_path, &result.text)?;
 
+    let mut warnings = result.warnings;
+    let flagged_words = flag_and_warn(&result.text, spell_checker, &mut warnings);
+
     Ok(PageRecord {
         page,
         source: PageSource::Ocr,
         confidence: result.confidence,
         status: PageStatus::Completed,
-        warnings: result.warnings,
+        warnings,
+        flagged_words,
     })
 }
 
@@ -118,6 +154,7 @@ pub fn run_document<F: FnMut(JobEvent)>(
     source: &DocumentSource,
     output_dir: &Path,
     ocr: &dyn OCRProvider,
+    spell_checker: Option<&SpellChecker>,
     mut on_progress: F,
 ) -> CoreResult<JobState> {
     let raw_dir = output_dir.join("raw");
@@ -140,7 +177,7 @@ pub fn run_document<F: FnMut(JobEvent)>(
 
     for page in 1..=total_pages {
         on_progress(JobEvent::PageStarted { page, total: total_pages });
-        let record = match process_page(source, page, &tmp_dir, &raw_dir, ocr) {
+        let record = match process_page(source, page, &tmp_dir, &raw_dir, ocr, spell_checker) {
             Ok(record) => {
                 completed_pages += 1;
                 record
@@ -153,6 +190,7 @@ pub fn run_document<F: FnMut(JobEvent)>(
                     confidence: 0.0,
                     status: PageStatus::Failed,
                     warnings: vec![e.to_string()],
+                    flagged_words: vec![],
                 }
             }
         };
@@ -249,7 +287,7 @@ mod tests {
             path: image_path,
             kind: DocumentKind::Image,
         };
-        let state = run_document(&source, &output_dir, &StubOcr, |_| {}).unwrap();
+        let state = run_document(&source, &output_dir, &StubOcr, None, |_| {}).unwrap();
 
         assert_eq!(state.status, JobStatus::Completed);
         assert_eq!(state.completed_pages, 1);
@@ -271,7 +309,7 @@ mod tests {
             path: image_path,
             kind: DocumentKind::Image,
         };
-        let state = run_document(&source, &output_dir, &FailingOcr, |_| {}).unwrap();
+        let state = run_document(&source, &output_dir, &FailingOcr, None, |_| {}).unwrap();
 
         assert_eq!(state.status, JobStatus::CompletedWithWarnings);
         assert_eq!(state.failed_pages, vec![1]);
