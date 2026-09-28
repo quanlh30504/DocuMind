@@ -69,9 +69,21 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "DocuMind ${{ github.ref_name }}"
           releaseBody: |
-            Installers for Windows, macOS (Apple Silicon + Intel), and Linux
-            below. Unsigned build — see PACKAGING.md §5. First-run setup
-            downloads OCR components; see the app for details.
+            Unsigned build (no code-signing certificates yet — see PACKAGING.md §5), so your OS will warn on first launch. That's expected; instructions below.
+
+            ## Download & install
+
+            **Windows** — download the `.msi` (or `.exe`), run it. SmartScreen will warn "Windows protected your PC" → click **More info → Run anyway**.
+
+            **macOS** — download the `.dmg`, drag DocuMind into Applications. Gatekeeper will block a normal double-click on first open → **right-click the app → Open** (or System Settings → Privacy & Security → "Open Anyway").
+
+            **Linux (`.deb`, Debian/Ubuntu)** — `sudo apt install ./DocuMind_*.deb` (or `sudo dpkg -i` + `sudo apt -f install` if you used dpkg directly). This automatically installs everything DocuMind needs: Tesseract OCR + English/Vietnamese language data, Poppler (PDF tools), and the spelling dictionaries.
+
+            **Linux (`.AppImage`, any distro)** — `chmod +x DocuMind_*.AppImage && ./DocuMind_*.AppImage`. Unlike the `.deb`, this does **not** auto-install the OCR dependencies above. On first launch, the app's "Local Components" panel will show exactly what's missing; on apt-based distros (Ubuntu/Debian/Mint/...) there's an **Install Missing Dependencies** button that installs them for you (asks for your password via a graphical prompt). On other distros, the app shows the equivalent manual install command to run yourself.
+
+            ## Current limitation
+
+            OCR currently runs via the system's Tesseract installation rather than a bundled engine (see MVP_PLAN.md's Phase 2 engine-sequencing note) — this is why the dependencies above exist at all. That will go away once the documented default OCR engine (RapidOCR via ONNX Runtime) ships bundled with the app.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}

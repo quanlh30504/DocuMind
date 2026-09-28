@@ -6,4 +6,5 @@ pub mod ocr;
 pub mod pdf;
 pub mod preprocess;
 pub mod spellcheck;
+pub mod system_deps;
 pub mod traits;

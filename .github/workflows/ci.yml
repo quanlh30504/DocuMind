@@ -27,6 +27,7 @@ jobs:
             tesseract-ocr \
             tesseract-ocr-eng \
             tesseract-ocr-vie \
+            hunspell-en-us \
             hunspell-vi
 
       - uses: dtolnay/rust-toolchain@stable

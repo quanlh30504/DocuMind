@@ -6,6 +6,12 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import pkg from "../package.json";
 import "./App.css";
 
+interface SystemDependency {
+  name: string;
+  package: string;
+  installed: boolean;
+}
+
 interface HardwareProfile {
   platform: string;
   cpu_cores: number;
@@ -46,9 +52,10 @@ interface JobState {
 
 type JobEvent =
   | { type: "page_started"; page: number; total: number }
-  | { type: "page_completed"; page: number; total: number; status: "completed" | "failed" };
+  | { type: "page_completed"; page: number; total: number; status: "completed" | "failed" }
+  | { type: "page_skipped"; page: number; total: number };
 
-type PageLogEntry = { page: number; status: "running" | "completed" | "failed" };
+type PageLogEntry = { page: number; status: "running" | "completed" | "failed" | "skipped" };
 
 const LANGUAGE_LABELS: Record<string, string> = {
   eng: "English",
@@ -82,19 +89,42 @@ function App() {
   const [pageTotal, setPageTotal] = useState(0);
   const [pageLog, setPageLog] = useState<PageLogEntry[]>([]);
   const [results, setResults] = useState<{ state: JobState; outputDir: string }[]>([]);
+  const [systemDeps, setSystemDeps] = useState<SystemDependency[]>([]);
+  const [installing, setInstalling] = useState(false);
+  const [installMessage, setInstallMessage] = useState<string | null>(null);
+
+  async function refreshDependencyStatus() {
+    invoke<string>("ocr_runtime_status").then(setOcrStatus);
+    invoke<string[]>("ocr_languages").then(setLanguages);
+    invoke<SystemDependency[]>("check_system_dependencies").then(setSystemDeps);
+  }
 
   useEffect(() => {
     invoke<HardwareProfile>("get_hardware_profile").then(setHardware);
-    invoke<string>("ocr_runtime_status").then(setOcrStatus);
-    invoke<string[]>("ocr_languages").then(setLanguages);
+    refreshDependencyStatus();
   }, []);
+
+  async function installMissingDependencies() {
+    setInstalling(true);
+    setInstallMessage(null);
+    try {
+      const result = await invoke<string>("install_system_dependencies");
+      setInstallMessage(result || "Installed successfully.");
+    } catch (e) {
+      setInstallMessage(String(e));
+    } finally {
+      setInstalling(false);
+      refreshDependencyStatus();
+    }
+  }
 
   useEffect(() => {
     const unlisten = listen<JobEvent>("job://progress", (event) => {
       const payload = event.payload;
       setPageTotal(payload.total);
       setPageLog((log) => {
-        const status = payload.type === "page_started" ? "running" : payload.status;
+        const status =
+          payload.type === "page_started" ? "running" : payload.type === "page_skipped" ? "skipped" : payload.status;
         const idx = log.findIndex((e) => e.page === payload.page);
         const entry: PageLogEntry = { page: payload.page, status };
         if (idx === -1) return [...log, entry];
@@ -237,6 +267,7 @@ function App() {
                 <li key={e.page} className={`page-log-${e.status}`}>
                   {e.status === "running" && "⏳"}
                   {e.status === "completed" && "✓"}
+                  {e.status === "skipped" && "⏭"}
                   {e.status === "failed" && "✗"}
                   {" "}Page {e.page}
                 </li>
@@ -333,6 +364,24 @@ function App() {
           <strong>{languages.length > 0 ? languages.map((l) => LANGUAGE_LABELS[l] ?? l).join(", ") : "none installed"}</strong>
         </p>
         <p>Processing: ● Offline</p>
+
+        <ul className="dep-list">
+          {systemDeps.map((d) => (
+            <li key={d.package} className={d.installed ? "dep-ok" : "dep-missing"}>
+              {d.installed ? "✓" : "✗"} {d.name}
+              {!d.installed && <span className="dep-pkg"> ({d.package})</span>}
+            </li>
+          ))}
+        </ul>
+
+        {systemDeps.some((d) => !d.installed) && (
+          <div className="dep-install">
+            <button onClick={installMissingDependencies} disabled={installing}>
+              {installing ? "Installing… (check for a password prompt)" : "Install Missing Dependencies"}
+            </button>
+            {installMessage && <p className="install-message">{installMessage}</p>}
+          </div>
+        )}
       </section>
 
       <section className="status-panel">

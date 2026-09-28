@@ -5,6 +5,7 @@ use crate::core::hardware::{HardwareManager, HardwareProfile};
 use crate::core::job::{self, JobEvent, JobState};
 use crate::core::ocr::TesseractOcrProvider;
 use crate::core::spellcheck::SpellChecker;
+use crate::core::system_deps::{self, SystemDependency};
 use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
@@ -72,6 +73,31 @@ async fn process_document(
     .map_err(|e| e.to_string())?
 }
 
+/// Checks the system CLI tools Phase 2's OCR pipeline depends on
+/// (core/system_deps.rs) — Tesseract + language packs, Poppler, spellcheck
+/// dictionaries — so the UI can show exactly what's missing rather than a
+/// generic "OCR not ready" (spec §2).
+#[tauri::command]
+fn check_system_dependencies() -> Vec<SystemDependency> {
+    system_deps::check_all()
+}
+
+/// Installs whatever `check_system_dependencies` reports missing, via
+/// `pkexec apt-get install` (graphical password prompt) on apt-based Linux.
+/// Blocking (waits on the user's password prompt / apt), hence
+/// `spawn_blocking`. On any platform/setup where that's not possible,
+/// returns the manual command instead of silently doing nothing.
+#[tauri::command]
+async fn install_system_dependencies() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let deps = system_deps::check_all();
+        let missing = system_deps::missing_packages(&deps);
+        system_deps::install_missing(&missing)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -82,7 +108,9 @@ pub fn run() {
             discover_documents,
             ocr_runtime_status,
             ocr_languages,
-            process_document
+            process_document,
+            check_system_dependencies,
+            install_system_dependencies
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

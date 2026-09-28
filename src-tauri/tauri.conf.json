@@ -38,7 +38,14 @@
     ],
     "linux": {
       "deb": {
-        "depends": ["tesseract-ocr", "poppler-utils"]
+        "depends": [
+          "tesseract-ocr",
+          "tesseract-ocr-eng",
+          "tesseract-ocr-vie",
+          "poppler-utils",
+          "hunspell-en-us",
+          "hunspell-vi"
+        ]
       }
     }
   }

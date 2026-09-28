@@ -18,11 +18,22 @@ See the planning docs before touching the pipeline code:
 - Spelling: dictionary-based error flagging/suggestion, not auto-applied (`core/spellcheck.rs`) — see `MODEL_STRATEGY.md` §5 for the AI-vs-heuristic boundary
 - Local AI: llama.cpp sidecar (Phase 4, not yet implemented)
 
+## Installing a release
+
+Download the installer for your OS from the [Releases page](../../releases). Unsigned builds (no code-signing certificates yet — `PACKAGING.md` §5), so your OS will warn on first launch:
+
+- **Windows**: run the `.msi`/`.exe`. SmartScreen warns → **More info → Run anyway**.
+- **macOS**: open the `.dmg`, drag to Applications. Gatekeeper blocks a normal open → **right-click the app → Open**.
+- **Linux `.deb`**: `sudo apt install ./DocuMind_*.deb` — this auto-installs everything DocuMind needs (Tesseract + language packs, Poppler, spelling dictionaries).
+- **Linux `.AppImage`**: `chmod +x DocuMind_*.AppImage && ./DocuMind_*.AppImage`. Unlike the `.deb`, this does **not** auto-install the OCR dependencies. On first launch, the app's **Local Components** panel shows exactly what's missing, with an **Install Missing Dependencies** button (apt-based distros: installs via a graphical password prompt; other distros: shows the manual command to run).
+
+This dependency-install step exists because OCR currently runs via the system's Tesseract installation rather than a bundled engine — see "Stack" below.
+
 ## Development
 
 Prerequisites: Rust toolchain, Node.js 22+, and on Linux:
 - Build headers: `libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev patchelf` (see [Tauri's Linux prerequisites](https://tauri.app/start/prerequisites/); note `libayatana-appindicator3-dev`, not `libappindicator3-dev`, on Ubuntu 24.04+ — they conflict)
-- Runtime tools the app currently shells out to: `tesseract-ocr tesseract-ocr-eng tesseract-ocr-vie poppler-utils`, and `hunspell-vi` for Vietnamese spell-suggestions (English uses the pre-installed `hunspell-en-us`)
+- Runtime tools the app currently shells out to: `tesseract-ocr tesseract-ocr-eng tesseract-ocr-vie poppler-utils hunspell-en-us hunspell-vi`. The app's Local Components panel (`core/system_deps.rs`) checks for all of these and, on apt-based Linux, can install what's missing itself.
 
 ```bash
 npm install
@@ -53,4 +64,4 @@ To cut a release: bump `version` in `src-tauri/tauri.conf.json` and `package.jso
 
 ## Status
 
-Phase 2 (OCR MVP) complete and verified against real documents; Phase 6 (Packaging) groundwork — CI + cross-platform release workflow, local Linux packaging verified — is in place ahead of Phases 3-5. See [`MVP_PLAN.md`](MVP_PLAN.md) for the full phase breakdown, exit criteria, and what's still open.
+Phase 2 (OCR MVP) complete and verified against real documents. Phase 5 (resume/retry, verified with a real 150-page interrupt-and-resume run) and Phase 6 (Packaging: CI + cross-platform release workflow, local Linux packaging verified, in-app dependency install) groundwork is in place ahead of Phases 3-4. See [`MVP_PLAN.md`](MVP_PLAN.md) for the full phase breakdown, exit criteria, and what's still open.
