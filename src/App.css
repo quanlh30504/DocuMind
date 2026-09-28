@@ -1,0 +1,137 @@
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+
+  color: #0f0f0f;
+  background-color: #f6f6f6;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+.container {
+  margin: 0 auto;
+  max-width: 720px;
+  padding: 4vh 1.5rem 4rem;
+  display: flex;
+  flex-direction: column;
+  text-align: center;
+}
+
+.subtitle {
+  color: #666;
+  margin-top: -0.5rem;
+}
+
+.row {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+h1,
+h2 {
+  text-align: center;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  color: #0f0f0f;
+  background-color: #ffffff;
+  transition: border-color 0.25s;
+  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  outline: none;
+}
+
+button:hover {
+  border-color: #396cd8;
+}
+button:active {
+  border-color: #396cd8;
+  background-color: #e8e8e8;
+}
+
+.drop-zone {
+  border: 2px dashed #bbb;
+  border-radius: 12px;
+  padding: 2.5rem 1rem;
+  margin: 1.5rem 0;
+}
+
+.status-panel,
+.source-list {
+  text-align: left;
+  background: #ffffffaa;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+}
+
+.status-panel ul,
+.source-list {
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+.source-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.source-list li {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid #eee;
+  font-size: 0.9em;
+  word-break: break-all;
+}
+
+.source-list .kind {
+  display: inline-block;
+  min-width: 3.5em;
+  font-weight: 600;
+  color: #396cd8;
+}
+
+.error {
+  color: #c0392b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #f6f6f6;
+    background-color: #2f2f2f;
+  }
+
+  .subtitle {
+    color: #aaa;
+  }
+
+  button {
+    color: #ffffff;
+    background-color: #0f0f0f98;
+  }
+  button:active {
+    background-color: #0f0f0f69;
+  }
+
+  .status-panel,
+  .source-list {
+    background: #ffffff12;
+  }
+
+  .source-list li {
+    border-bottom-color: #ffffff22;
+  }
+}
