@@ -54,6 +54,15 @@ Concretizes the spec's §47 phase list against the decisions in `TECH_DECISION.m
 
 Given both findings, `PageRecord.suggested_corrections` are shown for user review (UI: "N suggested correction(s) — review before using, not applied automatically") but **never written into `raw/page-NNN.txt` or `full_document.md`** — the output text is always the untouched OCR/native text. Real automatic correction needs `LocalAIProvider::suggest_correction`, i.e. this phase's still-outstanding llama.cpp work.
 
+**"Tier 1" rule-based accuracy pass (user explicitly asked to refactor the rule-based approach further before committing to the LLM path; two tiers were proposed, user chose Tier 1 first):**
+1. **Frequency-ranked suggestions.** Added `resources/wordfreq/{en_top10k.txt,vi_syllables.tsv}` (bundled, no network download) and rank ties on real word frequency instead of arbitrary edit-distance-tuple order. This directly fixed both English miscorrections above: "smple"→**"simple"** (was "smile"), "definately"→**"definitely"** (was "definably"), verified via a regression test (`frequency_breaks_ties_toward_the_common_word`).
+2. **A much better Vietnamese word source.** The `hunspell-vi` gaps ("hóa"/"hòa"/"thỏa" missing) turned out to be a tone-mark-placement-convention issue, not just small size (see `resources/wordfreq/README.md`) — the bundled frequency corpus (14,492 syllables, derived from a merged Vietnamese wordlist) covers both conventions and is now unioned into validity checking, not just suggestion ranking. `MIN_WORDS_FOR_AUTOCORRECT` was removed entirely — frequency data, not raw dictionary size, is what makes ranking trustworthy now. Verified: `hóa hòa thỏa` no longer false-flagged (`vietnamese_common_words_are_no_longer_false_flagged`).
+3. **Diacritic-aware edit costs for Vietnamese.** Substitutions between characters in the same confusion group (taken directly from Hunspell's own `vi_VN.aff` `MAP` directives, e.g. ơ/ờ/ở/ỡ/ớ/ợ) cost less than an arbitrary substitution, matching the dominant real OCR failure mode (diacritic/tone-mark confusion, not random noise).
+
+Re-verified against the user's real garbled text after this pass: several previously-wrong or unresolved corrections improved (e.g. `øiá`→`giá` now exactly correct), though some heavily garbled words (`ĐỒIH`, intended "gồm") remain too far in edit distance to suggest correctly — an expected limit of a no-context approach, left as Tier 2 (local LLM) scope. Release-build performance: ~19.5ms for a full page with 12 unresolved words (debug build was ~20x slower — release timing is what matters for the shipped app).
+
+**Tier 2 (deferred, user's choice):** a local LLM via llama.cpp, prompted with surrounding context to resolve exactly the cases Tier 1 structurally cannot (context-dependent word choice, badly garbled words) — this is genuinely `LocalAIProvider::suggest_correction`, the Phase 4 work already described above, not a new idea.
+
 ## Phase 5 — Reliability
 
 - Full resume/retry per §22–23: kill the process mid-job in a test harness, relaunch, verify exact resume point and that completed pages aren't reprocessed.

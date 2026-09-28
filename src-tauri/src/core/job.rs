@@ -106,9 +106,6 @@ fn check_spelling(text: &str, spell_checker: Option<&SpellChecker>, warnings: &m
         }
         return SpellcheckOutcome { suggested_corrections: vec![], flagged_words: vec![] };
     }
-    for lang in &checker.low_coverage_langs {
-        warnings.push(format!("spellcheck_low_coverage:{lang}"));
-    }
     let result = checker.correct_text(text, MAX_SPELLCHECK_ITEMS_PER_PAGE);
     if !result.corrections.is_empty() {
         warnings.push(format!("suggested_corrections:{}", result.corrections.len()));

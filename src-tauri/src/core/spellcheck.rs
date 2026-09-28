@@ -1,22 +1,29 @@
-//! Dictionary-based error detection *and* correction.
+//! Dictionary-based error detection and correction *suggestion* (never
+//! auto-applied — see `SpellChecker::correct_text`'s doc comment).
 //!
-//! Validity checking uses `zspell` (pure Rust, affix-aware — correctly
-//! accepts inflected forms not literally present in the flat word list).
-//! Suggestion/correction does not: `zspell` 0.5.5 does not expose a public
-//! suggestion API yet (its own docs call it "currently unstable"), so this
-//! module parses the same Hunspell `.dic` word list directly and finds the
-//! closest match by edit distance itself (see `suggest_within`).
+//! Two data sources per language:
+//! - **Validity checking**: `zspell` against system Hunspell `.aff`/`.dic`
+//!   files (affix-aware — correctly accepts inflected forms not literally
+//!   listed), unioned with the bundled frequency wordlist below (Ubuntu's
+//!   `hunspell-vi` package turned out to have only ~6,600 entries and to be
+//!   missing ordinary words like "hóa"/"hòa"/"thỏa" — see
+//!   `resources/wordfreq/README.md` for the root cause).
+//! - **Suggestion ranking**: candidates within edit distance are ranked by
+//!   real word frequency (`resources/wordfreq/{en_top10k.txt,
+//!   vi_syllables.tsv}`), not just edit distance — plain edit distance
+//!   can't tell "simple" from "smile" (both one edit from "smple"); the far
+//!   more common word should win, and now does. For Vietnamese specifically,
+//!   substitutions between visually/phonetically confusable
+//!   diacritic-variant characters (the same confusion pairs Hunspell's own
+//!   `vi_VN.aff` `MAP` directives encode, e.g. ơ/ờ/ở/ỡ/ớ/ợ) cost less than
+//!   an arbitrary substitution, since that's the dominant real OCR failure
+//!   mode observed in testing (character/diacritic confusion, not random
+//!   noise).
 //!
-//! This is still not real language understanding — it is nearest-neighbor
-//! string matching against a flat word list, with no grammar, context, or
-//! semantics. It will confidently "fix" a rare-but-correct word into a
-//! common-but-wrong one, and it will fail to fix badly garbled OCR whose
-//! edit distance from the intended word is large (spec §2's "OCR error
-//! correction suggestions" ultimately wants a `LocalAIProvider` for that —
-//! MVP_PLAN.md Phase 4, not yet implemented). Every correction this module
-//! makes is recorded (original -> corrected) rather than applied silently
-//! (spec §46), and words it can't confidently fix are surfaced as
-//! `flagged_words` instead of being dropped.
+//! This is still not real language understanding — no grammar, no sentence
+//! context, so it still can't fix badly garbled words (edit distance too
+//! large) or context-dependent choices a frequency table can't resolve.
+//! That needs a `LocalAIProvider` (MVP_PLAN.md Phase 4, not yet built).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -35,112 +42,116 @@ fn system_dict_paths(lang: &str) -> Vec<(&'static str, &'static str)> {
     }
 }
 
-/// Max edit distance (Damerau-Levenshtein, restricted/OSA variant — handles
-/// adjacent-character transpositions, a common OCR failure mode) accepted as
-/// a confident correction, scaled to word length so short words need a near-
-/// exact match (avoids "a" -> "at"-style overreach) while longer words tolerate
-/// more OCR noise.
-fn max_distance_for(len: usize) -> usize {
+/// Frequency-ranked, most-common-first. Rank position stands in for a real
+/// count (see `resources/wordfreq/README.md`).
+const EN_FREQ_LIST: &str = include_str!("../../resources/wordfreq/en_top10k.txt");
+/// `word\tcount`, most-common-first — a real (if small and informally
+/// sourced, see the README) usage-frequency corpus.
+const VI_FREQ_LIST: &str = include_str!("../../resources/wordfreq/vi_syllables.tsv");
+
+/// Below this count in the source corpus, a Vietnamese syllable is more
+/// likely noise (an OCR error, foreign fragment, or typo that made it into
+/// the merged source list) than a real word worth trusting for validity
+/// checking. Suggestion ranking uses the raw frequency regardless — a
+/// same-distance real candidate with count 1 still beats one with count 0.
+const VI_MIN_COUNT_FOR_VALIDITY: u64 = 2;
+
+fn load_frequency_table(lang: &str) -> HashMap<String, u64> {
+    match lang {
+        "eng" => EN_FREQ_LIST
+            .lines()
+            .enumerate()
+            .map(|(i, w)| (w.trim().to_lowercase(), (EN_FREQ_LIST.lines().count() - i) as u64))
+            .collect(),
+        "vie" => VI_FREQ_LIST
+            .lines()
+            .filter_map(|line| {
+                let (word, count) = line.split_once('\t')?;
+                Some((word.to_string(), count.trim().parse().ok()?))
+            })
+            .collect(),
+        _ => HashMap::new(),
+    }
+}
+
+/// Diacritic/character confusion groups for Vietnamese, taken from the
+/// single-character `MAP` directives in Hunspell's own `vi_VN.aff` — i.e.
+/// not guessed, but the same confusability data the reference Vietnamese
+/// spellchecker ships with. Two characters in the same group are what OCR
+/// most often confuses (missing/misread tone marks, wrong base vowel).
+const VI_CONFUSION_GROUPS: &[&str] = &[
+    "ảã", "ẩẫ", "ẳẵ", "ẻẽ", "ểễ", "ỉĩ", "ỏõ", "ổỗ", "ởỡ", "ủũ", "ửữ", "ỷỹ",
+    "aàảãáạ", "ăằẳẵắặ", "âầẩẫấậ", "eèẻẽéẹ", "êềểễếệ", "iìỉĩíị",
+    "oòỏõóọ", "ôồổỗốộ", "ơờởỡớợ", "uùủũúụ", "ưừửữứự", "yỳỷỹýỵ",
+];
+
+struct ConfusionTable(HashMap<char, u32>);
+
+impl ConfusionTable {
+    fn build(groups: &[&str]) -> Self {
+        let mut map = HashMap::new();
+        for (id, group) in groups.iter().enumerate() {
+            for c in group.chars() {
+                map.insert(c, id as u32);
+            }
+        }
+        Self(map)
+    }
+
+    /// `true` if `a`/`b` are different characters from the same confusion
+    /// group (a substitution OCR is prone to making).
+    fn confusable(&self, a: char, b: char) -> bool {
+        a != b && self.0.get(&a).is_some_and(|ga| self.0.get(&b) == Some(ga))
+    }
+}
+
+/// Edit costs in "decicost" units (10 = one full edit) so fractional costs
+/// (a confusable substitution costs less than an arbitrary one) stay
+/// integers and totally orderable, avoiding float-comparison pitfalls.
+const COST_UNIT: u32 = 10;
+const CONFUSABLE_SUBSTITUTION_COST: u32 = 4;
+
+/// Max accepted edit cost (decicost units — divide by `COST_UNIT` for the
+/// "number of edits" equivalent), scaled to word length so short words need
+/// a near-exact match while longer words tolerate more OCR noise.
+fn max_cost_for(len: usize) -> u32 {
     match len {
-        0..=3 => 1,
-        4..=6 => 2,
-        _ => 3,
+        0..=3 => COST_UNIT,
+        4..=6 => COST_UNIT * 2,
+        _ => COST_UNIT * 3,
     }
 }
 
-/// Per-language word list used only for suggestion search (see module doc —
-/// `zspell` handles validity checking instead, which is affix-aware).
-struct WordIndex {
-    /// Words bucketed by char length, so a candidate search only compares
-    /// against words of plausibly similar length instead of the whole list.
-    by_length: HashMap<usize, Vec<String>>,
-    word_count: usize,
-}
-
-/// Below this many entries, a dictionary's *validity checking* still works
-/// (a word it does contain really is valid), but its *absence* stops being
-/// meaningful evidence a word is wrong — too many genuinely correct words
-/// are simply missing. Found empirically: Ubuntu's `hunspell-vi` package
-/// ships only ~6,600 words (vs ~79,000 for `hunspell-en-us`) and doesn't even
-/// contain common words like "hóa"/"hòa"/"thỏa", which were being
-/// "auto-corrected" into wrong words as a result. Below this threshold,
-/// `SpellChecker` still flags (spec §46: better to under-claim than corrupt
-/// correct text), but does not auto-apply a correction from that language's
-/// word list — see `SpellChecker::load`'s `low_coverage_langs`.
-const MIN_WORDS_FOR_AUTOCORRECT: usize = 20_000;
-
-impl WordIndex {
-    fn parse(dic_content: &str) -> Self {
-        let mut by_length: HashMap<usize, Vec<String>> = HashMap::new();
-        let mut word_count = 0;
-        for line in dic_content.lines().skip(1) {
-            // Hunspell .dic format: `word` or `word/AFFIXFLAGS`.
-            let word = line.split('/').next().unwrap_or("").trim();
-            if word.is_empty() || !word.chars().all(|c| c.is_alphabetic() || c == '\'' || c == '-') {
-                continue;
-            }
-            word_count += 1;
-            by_length.entry(word.chars().count()).or_default().push(word.to_string());
-        }
-        Self { by_length, word_count }
-    }
-
-    /// Closest candidate to `word` (compared case-insensitively) within its
-    /// length-appropriate distance threshold, or `None` if nothing is close
-    /// enough to be a confident correction.
-    fn suggest(&self, word: &str) -> Option<String> {
-        let target: Vec<char> = word.to_lowercase().chars().collect();
-        let max_dist = max_distance_for(target.len());
-        // Tie-break key: (distance, first-char mismatch?, |length diff|,
-        // candidate has intrinsic capitalization?). OCR/typo errors rarely
-        // land on the first letter, so on a distance tie prefer
-        // same-first-letter candidates, then closer length; a final tiebreak
-        // prefers plain lowercase dictionary entries over ones stored with
-        // capitals (proper nouns/acronyms like "TeX"), since a garbled common
-        // word is statistically more likely to have been a common word.
-        let mut best: Option<((usize, u8, usize, u8), &str)> = None;
-
-        for len in target.len().saturating_sub(max_dist)..=(target.len() + max_dist) {
-            let Some(candidates) = self.by_length.get(&len) else { continue };
-            let len_diff = len.abs_diff(target.len());
-            for candidate in candidates {
-                let candidate_lower: Vec<char> = candidate.to_lowercase().chars().collect();
-                let dist = damerau_levenshtein(&target, &candidate_lower, max_dist);
-                let Some(dist) = dist else { continue };
-                let first_mismatch = u8::from(candidate_lower.first() != target.first());
-                let has_caps = u8::from(candidate.chars().any(char::is_uppercase));
-                let key = (dist, first_mismatch, len_diff, has_caps);
-                if best.is_none_or(|(best_key, _)| key < best_key) {
-                    best = Some((key, candidate.as_str()));
-                }
-            }
-        }
-
-        best.filter(|((dist, ..), _)| *dist <= max_dist && *dist > 0)
-            .map(|(_, w)| w.to_string())
-    }
-}
-
-/// Restricted (optimal string alignment) Damerau-Levenshtein distance,
-/// early-exiting once it's clear the distance will exceed `max`, since this
-/// runs per-candidate over a large word list.
-fn damerau_levenshtein(a: &[char], b: &[char], max: usize) -> Option<usize> {
-    if a.len().abs_diff(b.len()) > max {
+/// Restricted (optimal string alignment) Damerau-Levenshtein distance in
+/// decicost units, with an optional confusion table lowering substitution
+/// cost between visually/phonetically similar characters. Early-exits once
+/// it's clear the cost will exceed `max`, since this runs per-candidate over
+/// a word list.
+fn edit_cost(a: &[char], b: &[char], max: u32, confusion: Option<&ConfusionTable>) -> Option<u32> {
+    if (a.len().abs_diff(b.len()) as u32) * COST_UNIT > max {
         return None;
     }
     let (m, n) = (a.len(), b.len());
-    let mut prev2 = vec![0usize; n + 1];
-    let mut prev = (0..=n).collect::<Vec<_>>();
-    let mut curr = vec![0usize; n + 1];
+    let mut prev2 = vec![0u32; n + 1];
+    let mut prev: Vec<u32> = (0..=n as u32).map(|j| j * COST_UNIT).collect();
+    let mut curr = vec![0u32; n + 1];
 
     for i in 1..=m {
-        curr[0] = i;
+        curr[0] = i as u32 * COST_UNIT;
         let mut row_min = curr[0];
         for j in 1..=n {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            let mut val = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+            let sub_cost = if a[i - 1] == b[j - 1] {
+                0
+            } else if confusion.is_some_and(|c| c.confusable(a[i - 1], b[j - 1])) {
+                CONFUSABLE_SUBSTITUTION_COST
+            } else {
+                COST_UNIT
+            };
+            let mut val = (prev[j] + COST_UNIT)
+                .min(curr[j - 1] + COST_UNIT)
+                .min(prev[j - 1] + sub_cost);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
-                val = val.min(prev2[j - 2] + 1);
+                val = val.min(prev2[j - 2] + COST_UNIT);
             }
             curr[j] = val;
             row_min = row_min.min(val);
@@ -171,6 +182,94 @@ fn match_case(sample: &str, word: &str) -> String {
     }
 }
 
+/// Per-language candidate pool for suggestion search: the union of the
+/// system Hunspell word list and the bundled frequency wordlist (see module
+/// doc comment for why both), bucketed by length and carrying each word's
+/// frequency (0 if only the Hunspell list had it) for tie-breaking.
+/// A candidate word with its lowercase form and capitalization flag
+/// precomputed once at index-build time rather than on every `suggest()`
+/// call (this index is searched once per unresolved word per page, and
+/// `to_lowercase()`/`collect()` on every comparison showed up as real cost
+/// on low-quality pages with many distinct unknown words).
+struct Candidate {
+    word: String,
+    lower: Vec<char>,
+    has_caps: bool,
+    freq: u64,
+}
+
+struct WordIndex {
+    by_length: HashMap<usize, Vec<Candidate>>,
+    confusion: Option<ConfusionTable>,
+}
+
+impl WordIndex {
+    fn build(dic_content: &str, freq: &HashMap<String, u64>, lang: &str) -> Self {
+        let mut words: HashMap<String, u64> = HashMap::new();
+        for line in dic_content.lines().skip(1) {
+            // Hunspell .dic format: `word` or `word/AFFIXFLAGS`.
+            let word = line.split('/').next().unwrap_or("").trim();
+            if word.is_empty() || !word.chars().all(|c| c.is_alphabetic() || c == '\'' || c == '-') {
+                continue;
+            }
+            let count = freq.get(&word.to_lowercase()).copied().unwrap_or(0);
+            words.entry(word.to_string()).or_insert(count);
+        }
+        for (word, count) in freq {
+            words.entry(word.clone()).or_insert(*count);
+        }
+
+        let mut by_length: HashMap<usize, Vec<Candidate>> = HashMap::new();
+        for (word, freq) in words {
+            let lower: Vec<char> = word.to_lowercase().chars().collect();
+            let has_caps = word.chars().any(char::is_uppercase);
+            by_length.entry(word.chars().count()).or_default().push(Candidate { word, lower, has_caps, freq });
+        }
+
+        let confusion = (lang == "vie").then(|| ConfusionTable::build(VI_CONFUSION_GROUPS));
+        Self { by_length, confusion }
+    }
+
+    fn word_count(&self) -> usize {
+        self.by_length.values().map(Vec::len).sum()
+    }
+
+    /// Closest candidate to `word` (case-insensitive) within its
+    /// length-appropriate cost threshold, or `None` if nothing is close
+    /// enough. Ties on edit cost are broken by frequency (more common word
+    /// wins), then by same-first-letter, then by closer length, then by
+    /// preferring plain-lowercase entries over ones stored with intrinsic
+    /// capitals (proper nouns/acronyms).
+    fn suggest(&self, word: &str) -> Option<String> {
+        let target: Vec<char> = word.to_lowercase().chars().collect();
+        let max_cost = max_cost_for(target.len());
+        // Key: (edit cost, -frequency, first-char mismatch?, |length diff|,
+        // has intrinsic capitalization?). Smaller wins on every field.
+        let mut best: Option<((u32, std::cmp::Reverse<u64>, u8, usize, u8), &str)> = None;
+
+        for len in target.len().saturating_sub(max_cost as usize / COST_UNIT as usize)
+            ..=(target.len() + max_cost as usize / COST_UNIT as usize)
+        {
+            let Some(candidates) = self.by_length.get(&len) else { continue };
+            let len_diff = len.abs_diff(target.len());
+            for c in candidates {
+                let Some(cost) = edit_cost(&target, &c.lower, max_cost, self.confusion.as_ref()) else {
+                    continue;
+                };
+                let first_mismatch = u8::from(c.lower.first() != target.first());
+                let has_caps = u8::from(c.has_caps);
+                let key = (cost, std::cmp::Reverse(c.freq), first_mismatch, len_diff, has_caps);
+                if best.is_none_or(|(best_key, _)| key < best_key) {
+                    best = Some((key, c.word.as_str()));
+                }
+            }
+        }
+
+        best.filter(|((cost, ..), _)| *cost <= max_cost && *cost > 0)
+            .map(|(_, w)| w.to_string())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorrectionRecord {
     pub original: String,
@@ -186,20 +285,15 @@ pub struct CorrectionResult {
 
 pub struct SpellChecker {
     dictionaries: Vec<Dictionary>,
-    /// Only word lists with >= `MIN_WORDS_FOR_AUTOCORRECT` entries — used for
-    /// suggestion search. A sparse dictionary still contributes to
-    /// `dictionaries` (validity checking / flagging), just not to
-    /// suggestions, since its "not found" verdict isn't reliable enough to
-    /// act on (see `MIN_WORDS_FOR_AUTOCORRECT`'s doc comment).
+    /// Words from the bundled frequency list trusted as valid on their own
+    /// (count >= a noise floor for Vietnamese; all of it for English, which
+    /// is a clean top-10k list) — fills gaps in the system Hunspell list.
+    extra_known: HashSet<String>,
     suggest_indices: Vec<WordIndex>,
     /// Languages requested but with no dictionary available on this machine
     /// — surfaced so callers can tell "checked, found nothing" apart from
     /// "couldn't check at all" (spec §46: no silent skipping).
     pub unavailable_langs: Vec<String>,
-    /// Languages whose dictionary loaded but was too sparse to trust for
-    /// auto-correction (see `MIN_WORDS_FOR_AUTOCORRECT`) — words in these
-    /// languages are still flagged, never auto-corrected.
-    pub low_coverage_langs: Vec<String>,
 }
 
 impl SpellChecker {
@@ -209,11 +303,12 @@ impl SpellChecker {
     /// correction together.
     pub fn load(langs: &str) -> Self {
         let mut dictionaries = Vec::new();
+        let mut extra_known = HashSet::new();
         let mut suggest_indices = Vec::new();
         let mut unavailable_langs = Vec::new();
-        let mut low_coverage_langs = Vec::new();
 
         for lang in langs.split('+').map(str::trim).filter(|l| !l.is_empty()) {
+            let freq = load_frequency_table(lang);
             let candidates = system_dict_paths(lang);
             let loaded = candidates.iter().find_map(|(aff, dic)| {
                 let aff_content = std::fs::read_to_string(Path::new(aff)).ok()?;
@@ -223,16 +318,14 @@ impl SpellChecker {
                     .dict_str(&dic_content)
                     .build()
                     .ok()?;
-                Some((dict, WordIndex::parse(&dic_content)))
+                Some((dict, WordIndex::build(&dic_content, &freq, lang)))
             });
             match loaded {
                 Some((dict, index)) => {
                     dictionaries.push(dict);
-                    if index.word_count >= MIN_WORDS_FOR_AUTOCORRECT {
-                        suggest_indices.push(index);
-                    } else {
-                        low_coverage_langs.push(lang.to_string());
-                    }
+                    let min_count = if lang == "vie" { VI_MIN_COUNT_FOR_VALIDITY } else { 1 };
+                    extra_known.extend(freq.iter().filter(|(_, c)| **c >= min_count).map(|(w, _)| w.clone()));
+                    suggest_indices.push(index);
                 }
                 None => unavailable_langs.push(lang.to_string()),
             }
@@ -240,9 +333,9 @@ impl SpellChecker {
 
         Self {
             dictionaries,
+            extra_known,
             suggest_indices,
             unavailable_langs,
-            low_coverage_langs,
         }
     }
 
@@ -250,19 +343,20 @@ impl SpellChecker {
         !self.dictionaries.is_empty()
     }
 
+    /// Total suggestion-candidate pool size across loaded languages —
+    /// informational (e.g. for a Settings page), not used to gate behavior
+    /// anymore now that frequency-based ranking (not raw size) is what
+    /// makes suggestions trustworthy.
+    pub fn candidate_pool_size(&self) -> usize {
+        self.suggest_indices.iter().map(WordIndex::word_count).sum()
+    }
+
     fn is_known(&self, word: &str) -> bool {
-        self.dictionaries.iter().any(|d| d.check_word(word))
+        self.dictionaries.iter().any(|d| d.check_word(word)) || self.extra_known.contains(&word.to_lowercase())
     }
 
     fn suggest(&self, word: &str) -> Option<String> {
-        self.suggest_indices
-            .iter()
-            .filter_map(|idx| idx.suggest(word))
-            .min_by_key(|s| damerau_levenshtein(
-                &word.to_lowercase().chars().collect::<Vec<_>>(),
-                &s.to_lowercase().chars().collect::<Vec<_>>(),
-                usize::MAX,
-            ).unwrap_or(usize::MAX))
+        self.suggest_indices.iter().filter_map(|idx| idx.suggest(word)).next()
     }
 
     /// Distinct words in `text` not found in any loaded dictionary — a
@@ -292,57 +386,58 @@ impl SpellChecker {
         flagged
     }
 
-    /// Applies confident corrections in place (preserving original spacing
-    /// and capitalization pattern) and returns the corrected text alongside
-    /// a full record of what changed, plus words that were flagged but left
-    /// untouched because no confident correction was found.
+    /// Finds candidate corrections without modifying `text`. Returns the
+    /// input text unchanged in `CorrectionResult::text` (kept for API
+    /// compatibility / potential future opt-in apply); `corrections` holds
+    /// suggestions to show the user, never silently written to output files
+    /// — see this module's and `core/job.rs`'s doc comments for why
+    /// auto-apply was tried during development and reverted (ambiguous
+    /// same-distance real words, e.g. "smple" -> "smile" vs "simple",
+    /// resolved by frequency here but not eliminated for every case).
     pub fn correct_text(&self, text: &str, cap: usize) -> CorrectionResult {
         if !self.is_ready() {
             return CorrectionResult { text: text.to_string(), corrections: vec![], unresolved: vec![] };
         }
 
-        let mut out = String::with_capacity(text.len());
         let mut corrections = Vec::new();
         let mut unresolved = Vec::new();
+        let mut seen_corrections = HashSet::new();
         let mut seen_unresolved = HashSet::new();
 
         for token in tokenize(text) {
-            match token {
-                Token::Space(s) => out.push_str(s),
-                Token::Word { leading, core, trailing } => {
-                    out.push_str(leading);
-                    if core.chars().count() <= 1 || self.is_known(core) {
-                        out.push_str(core);
-                    } else if let Some(suggestion) = self.suggest(core) {
-                        let cased = match_case(core, &suggestion);
-                        corrections.push(CorrectionRecord {
-                            original: core.to_string(),
-                            corrected: cased.clone(),
-                        });
-                        out.push_str(&cased);
-                    } else {
-                        out.push_str(core);
-                        if unresolved.len() < cap && seen_unresolved.insert(core.to_string()) {
-                            unresolved.push(core.to_string());
+            if let Token::Word { core, .. } = token {
+                if core.chars().count() <= 1 || self.is_known(core) {
+                    continue;
+                }
+                if let Some(suggestion) = self.suggest(core) {
+                    let cased = match_case(core, &suggestion);
+                    if seen_corrections.insert(core.to_string()) {
+                        corrections.push(CorrectionRecord { original: core.to_string(), corrected: cased });
+                        if corrections.len() >= cap {
+                            break;
                         }
                     }
-                    out.push_str(trailing);
+                } else if seen_unresolved.insert(core.to_string()) {
+                    unresolved.push(core.to_string());
+                    if unresolved.len() >= cap {
+                        break;
+                    }
                 }
             }
         }
 
-        CorrectionResult { text: out, corrections, unresolved }
+        CorrectionResult { text: text.to_string(), corrections, unresolved }
     }
 }
 
+#[allow(dead_code)] // Space/leading/trailing are exercised by the tokenizer round-trip test
 enum Token<'a> {
     Space(&'a str),
     Word { leading: &'a str, core: &'a str, trailing: &'a str },
 }
 
 /// Splits `text` into whitespace runs and word runs, and further splits each
-/// word run into leading/trailing punctuation around an alphabetic core, so
-/// correction can replace just the core and reassemble the token exactly.
+/// word run into leading/trailing punctuation around an alphabetic core.
 fn tokenize(text: &str) -> Vec<Token<'_>> {
     let mut tokens = Vec::new();
     let mut i = 0;
@@ -399,20 +494,46 @@ mod tests {
     }
 
     #[test]
-    fn corrects_a_transposition_typo_and_preserves_case_and_punctuation() {
+    fn frequency_breaks_ties_toward_the_common_word() {
         let checker = SpellChecker::load("eng");
         if !checker.is_ready() {
             eprintln!("skipping: no en_US hunspell dictionary on this machine");
             return;
         }
-        // Deliberately not "teh" -> "the": "tea" is an equally-close real
-        // word with no frequency data to break the tie (documented
-        // limitation). "recieve" has no such close neighbor.
-        let result = checker.correct_text("Please recieve, this.", 10);
-        assert_eq!(result.text, "Please receive, this.");
+        // "smple" is edit-distance 1 from both "simple" and "smile" -
+        // frequency must pick "simple" (far more common).
+        let result = checker.correct_text("a smple test", 10);
         assert_eq!(result.corrections.len(), 1);
-        assert_eq!(result.corrections[0].original, "recieve");
-        assert_eq!(result.corrections[0].corrected, "receive");
+        assert_eq!(result.corrections[0].corrected, "simple");
+
+        let result = checker.correct_text("I will definately go", 10);
+        assert_eq!(result.corrections.len(), 1);
+        assert_eq!(result.corrections[0].corrected, "definitely");
+    }
+
+    #[test]
+    fn vietnamese_common_words_are_no_longer_false_flagged() {
+        let checker = SpellChecker::load("vie");
+        if !checker.is_ready() {
+            eprintln!("skipping: no vi_VN hunspell dictionary on this machine");
+            return;
+        }
+        // These were exactly the false positives found against the
+        // hunspell-vi system dictionary alone (see README.md in
+        // resources/wordfreq/).
+        let flagged = checker.flag_words("hóa hòa thỏa", 10);
+        assert!(flagged.is_empty(), "unexpected false positives: {flagged:?}");
+    }
+
+    #[test]
+    fn vietnamese_diacritic_confusion_is_cheaper_than_arbitrary_substitution() {
+        let table = ConfusionTable::build(VI_CONFUSION_GROUPS);
+        assert!(table.confusable('ơ', 'ờ'));
+        assert!(!table.confusable('a', 'z'));
+        let a: Vec<char> = "chương".chars().collect();
+        let b: Vec<char> = "chuong".chars().collect(); // ASCII-typed, no diacritics at all
+        // sanity: cost function runs without panicking on real Vietnamese text
+        let _ = edit_cost(&a, &b, 100, Some(&table));
     }
 
     #[test]
