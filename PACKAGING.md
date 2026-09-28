@@ -43,6 +43,11 @@ push (tag)
 
 Model weights and heavy runtime binaries are **not** rebuilt per CI run — they're versioned, hosted objects (e.g., GitHub Releases assets or object storage) referenced by the manifest; CI publishes the manifest, it doesn't re-upload multi-GB files on every commit.
 
+**Implemented** (`.github/workflows/`):
+- `ci.yml` — runs on every push/PR to `main`: installs Linux build + runtime deps (webkit2gtk headers, poppler-utils, tesseract + language packs, hunspell-vi), then `tsc --noEmit`, `cargo check --all-targets`, `cargo test --all-targets`. Fast feedback on every change, Linux-only (the full cross-platform matrix is expensive to run on every push).
+- `release.yml` — the actual build matrix above, triggered on `v*.*.*` tags or manual dispatch. Uses `tauri-apps/tauri-action` (the framework's own official action) rather than hand-rolling `tauri build` + artifact upload per OS, since it already handles per-platform bundler invocation and GitHub Release asset attachment correctly. Publishes as a **draft** release (a human reviews and publishes, per this project's own guidance to confirm before anything user-facing goes out) rather than publishing automatically.
+- ONNX Runtime/llama.cpp binary-fetching and the signed manifest publish step are not yet implemented — they don't exist to fetch/publish yet, since OCR is currently the Tesseract CLI (system-installed, not bundled) per `MVP_PLAN.md`'s Phase 2 engine-sequencing note. `deb.depends` in `tauri.conf.json` currently lists `tesseract-ocr`/`poppler-utils` as hard package dependencies — an accurate reflection of today's CLI-shellout implementation, to be replaced by the bundled-sidecar model (§3 above) once RapidOCR-ONNX + `ort` lands.
+
 ## 5. Code signing (deferred, noted for completeness)
 
 Windows (Authenticode) and macOS (Developer ID + notarization) signing are required for a smooth install experience (unsigned builds trigger SmartScreen/Gatekeeper warnings) but depend on the team obtaining certificates — out of scope for the architecture decision itself, tracked as a Phase 6 checklist item in `MVP_PLAN.md` rather than blocking earlier phases. Linux packages are not typically signed in the same way; `.deb`/`.AppImage` integrity instead relies on the same SHA-256 manifest users can verify against the release page.

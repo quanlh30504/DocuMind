@@ -1,7 +1,7 @@
 [package]
 name = "documind"
 version = "0.1.0"
-description = "Local-first OCR & Document Intelligence desktop app"
+description = "Local-first OCR & document intelligence desktop app"
 authors = ["DocuMind contributors"]
 edition = "2021"
 

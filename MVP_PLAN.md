@@ -82,6 +82,13 @@ Re-verified against the user's real garbled text after this pass: several previo
 
 **Exit criterion:** a clean machine (VM, no dev tools) can install from each platform's artifact, complete setup, and process a document — validated manually per OS before the first public release.
 
+**Started ahead of Phases 3-5, per explicit request, since packaging is independent of pipeline features:**
+- `.github/workflows/ci.yml` (fast Linux check on every push/PR) and `release.yml` (the full `PACKAGING.md` §4 matrix — Windows/macOS-arm64/macOS-Intel/Linux — triggered by a `v*.*.*` tag, using `tauri-apps/tauri-action`, publishing a **draft** GitHub Release) are implemented.
+- `tauri.conf.json` bundle metadata filled in (publisher/copyright/category/descriptions, `deb.depends`); fixed the `identifier` ending in `.app` (conflicts with macOS's bundle extension, flagged by Tauri's own build warning) to `com.documind.desktop`.
+- **Locally verified on Linux** (`npm run tauri build -- --bundles deb,appimage`): both `.deb` (3.5 MiB) and `.AppImage` (80 MiB) build successfully; the AppImage was launched directly and ran without error, confirming it's genuinely self-contained (bundles its own webkit2gtk/gtk library dependencies rather than assuming they're present).
+- `deb.depends` currently lists `tesseract-ocr`/`poppler-utils` as **hard package dependencies** — an honest reflection of Phase 2's current CLI-shellout OCR implementation, not the eventual bundled-sidecar model `DEPENDENCY_STRATEGY.md` describes. This should be revisited once RapidOCR-ONNX + `ort` replaces the system Tesseract dependency.
+- **Not done**: Windows/macOS builds are untested (no such runner available in this dev environment — they rely on CI, not yet run since no tag has been pushed); code signing; the Full Offline Bundle variant; the Settings page; the manifest-publish step (nothing to publish yet — no downloadable OCR/AI models exist).
+
 ## Cross-cutting, present from Phase 1 onward
 
 - **Offline enforcement** (`ARCHITECTURE.md` §6): the `NetworkGuard` and Offline Mode toggle exist from Phase 1, even before there's much to guard, so no later phase can add a network call without going through the reviewed choke point.
