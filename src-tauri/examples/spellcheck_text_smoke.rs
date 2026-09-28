@@ -11,6 +11,15 @@ fn main() {
 
     let checker = SpellChecker::load(lang);
     println!("ready={} unavailable={:?}", checker.is_ready(), checker.unavailable_langs);
-    let flagged = checker.flag_words(&text, 200);
-    println!("{} flagged: {:?}", flagged.len(), flagged);
+
+    let start = std::time::Instant::now();
+    let result = checker.correct_text(&text, 200);
+    println!("correct_text took {:?}", start.elapsed());
+
+    println!("{} corrections:", result.corrections.len());
+    for c in &result.corrections {
+        println!("  {} -> {}", c.original, c.corrected);
+    }
+    println!("{} unresolved (flagged, not fixed): {:?}", result.unresolved.len(), result.unresolved);
+    println!("--- corrected text ---\n{}\n--- end ---", result.text);
 }

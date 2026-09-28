@@ -48,6 +48,12 @@ Concretizes the spec's §47 phase list against the decisions in `TECH_DECISION.m
 
 **Verified** against the user's real garbled Vietnamese OCR output (`en_US`/`vi_VN` Hunspell dictionaries, both now installed): correctly flagged 14 genuinely wrong words (`Cihurơng`→Chương, `TRIÉN`/`TRIÊN`→TRIỂN, `Lÿ`→Lý, `ĐỒIH`→gồm, `óục`→mục, `øiá`→giá, ...), alongside a few expected false positives (real words like "hòa"/"thỏa" the dictionary missed in this split) — consistent with this being a heuristic signal, not a verdict, as documented in `core/spellcheck.rs`.
 
+**Auto-apply was attempted and reverted after two findings during testing (not asked, just the responsible default once found):**
+1. `hunspell-vi`'s word list is very sparse (~6,600 words vs. ~79,000 for `hunspell-en-us`) and is missing common words like "hóa"/"hòa"/"thỏa" — auto-applying corrections against it was actively turning *correct* Vietnamese words into wrong ones. `core/spellcheck.rs`'s `MIN_WORDS_FOR_AUTOCORRECT` threshold now disables suggestion-search (not validity-checking) for any dictionary below ~20k words; Vietnamese currently falls back to flag-only until a fuller dictionary is sourced.
+2. Even on the good English dictionary, a quick real-world sample got 2 of 4 corrections wrong ("smple"→"smile" instead of "simple"; "definately"→"definably" instead of "definitely") — pure edit-distance search with no word-frequency or context data can't break ties between two equally-close real words. This is a hard limit of the approach, not a bug to fix with more tuning.
+
+Given both findings, `PageRecord.suggested_corrections` are shown for user review (UI: "N suggested correction(s) — review before using, not applied automatically") but **never written into `raw/page-NNN.txt` or `full_document.md`** — the output text is always the untouched OCR/native text. Real automatic correction needs `LocalAIProvider::suggest_correction`, i.e. this phase's still-outstanding llama.cpp work.
+
 ## Phase 5 — Reliability
 
 - Full resume/retry per §22–23: kill the process mid-job in a test harness, relaunch, verify exact resume point and that completed pages aren't reprocessed.

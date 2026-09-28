@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { openPath } from "@tauri-apps/plugin-opener";
+import pkg from "../package.json";
 import "./App.css";
 
 interface HardwareProfile {
@@ -18,12 +19,18 @@ interface DocumentSource {
   kind: "pdf" | "image";
 }
 
+interface CorrectionRecord {
+  original: string;
+  corrected: string;
+}
+
 interface PageRecord {
   page: number;
   source: "native" | "ocr";
   confidence: number;
   status: "completed" | "failed";
   warnings: string[];
+  suggested_corrections: CorrectionRecord[];
   flagged_words: string[];
 }
 
@@ -55,6 +62,12 @@ function formatBytes(bytes: number): string {
 
 function basename(path: string): string {
   return path.split(/[/\\]/).pop() ?? path;
+}
+
+function dedupeCorrections(items: CorrectionRecord[]): CorrectionRecord[] {
+  const seen = new Map<string, CorrectionRecord>();
+  for (const item of items) seen.set(item.original, item);
+  return Array.from(seen.values());
 }
 
 function App() {
@@ -236,12 +249,21 @@ function App() {
         <section className="status-panel">
           <h2>Results</h2>
           {results.map(({ state: r, outputDir }) => {
+            const suggestions = dedupeCorrections(r.pages.flatMap((p) => p.suggested_corrections));
             const flaggedWords = Array.from(new Set(r.pages.flatMap((p) => p.flagged_words)));
             const spellcheckUnavailable = Array.from(
               new Set(
                 r.pages
                   .flatMap((p) => p.warnings)
                   .filter((w) => w.startsWith("spellcheck_unavailable:"))
+                  .map((w) => w.split(":")[1])
+              )
+            );
+            const lowCoverage = Array.from(
+              new Set(
+                r.pages
+                  .flatMap((p) => p.warnings)
+                  .filter((w) => w.startsWith("spellcheck_low_coverage:"))
                   .map((w) => w.split(":")[1])
               )
             );
@@ -259,23 +281,44 @@ function App() {
                 </p>
                 {spellcheckUnavailable.length > 0 && (
                   <p className="warning-note">
-                    ⚠ No dictionary installed for: {spellcheckUnavailable.join(", ")} — spelling flags skipped for those pages.
+                    ⚠ No dictionary installed for: {spellcheckUnavailable.join(", ")} — spelling checks skipped for those pages.
                   </p>
+                )}
+                {lowCoverage.length > 0 && (
+                  <p className="warning-note">
+                    ⚠ Dictionary for {lowCoverage.join(", ")} has limited word coverage on this machine — words are flagged, not suggested, to avoid guessing wrong.
+                  </p>
+                )}
+                {suggestions.length > 0 && (
+                  <details className="flagged-words" open>
+                    <summary>{suggestions.length} suggested correction(s) — review before using, not applied automatically</summary>
+                    <ul className="suggestion-list">
+                      {suggestions.map((c) => (
+                        <li key={c.original}>
+                          <span className="orig">{c.original}</span> → <span className="sugg">{c.corrected}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
                 )}
                 {flaggedWords.length > 0 && (
                   <details className="flagged-words">
-                    <summary>{flaggedWords.length} word(s) flagged as possibly misspelled/wrong</summary>
+                    <summary>{flaggedWords.length} word(s) flagged as possibly wrong (no suggestion found)</summary>
                     <p className="flagged-word-list">{flaggedWords.join(", ")}</p>
                   </details>
                 )}
-                <button onClick={() => openPath(outputDir)}>Open Output Folder</button>
+                <button onClick={() => openPath(outputDir).catch((e) => setError(String(e)))}>
+                  Open Output Folder
+                </button>
               </div>
             );
           })}
           <p className="ai-note">
-            Note: flagging above is dictionary-based only (no AI model installed) — it can <em>detect</em>{" "}
-            likely misspellings or garbled OCR/font errors, but cannot automatically fix them. A local AI
-            model (planned) would be needed to suggest actual corrections.
+            Note: the items above come from dictionary matching only (no AI model installed) — nearest-neighbor
+            word lookup with no grammar or context. It can be wrong (two real words can be equally close to a
+            typo), so suggestions are shown for you to review, never written into the output files automatically.
+            A local AI model (planned, not yet built) would be needed for correction that understands context
+            well enough to apply automatically.
           </p>
         </section>
       )}
@@ -306,6 +349,10 @@ function App() {
           <p>Detecting...</p>
         )}
       </section>
+
+      <footer className="app-footer">
+        DocuMind v{pkg.version} — by Quan Nguyen
+      </footer>
     </main>
   );
 }

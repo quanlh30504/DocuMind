@@ -139,6 +139,37 @@ button:active {
   word-break: break-word;
 }
 
+.suggestion-list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.suggestion-list li {
+  padding: 0.15rem 0;
+}
+
+.suggestion-list .orig {
+  color: #c0392b;
+  text-decoration: line-through;
+}
+
+.suggestion-list .sugg {
+  color: #2e7d32;
+  font-weight: 600;
+}
+
+.app-footer {
+  position: fixed;
+  right: 0.75rem;
+  bottom: 0.5rem;
+  font-size: 0.75em;
+  color: #999;
+  pointer-events: none;
+  user-select: none;
+}
+
 .lang-row {
   align-items: center;
   margin-top: 0.75rem;
@@ -274,5 +305,9 @@ button:active {
 
   .flagged-word-list {
     color: #ccc;
+  }
+
+  .app-footer {
+    color: #666;
   }
 }
